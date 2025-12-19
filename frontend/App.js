@@ -90,7 +90,8 @@ const TestingAgent = () => {
     // Explore URL
     const exploreURL = async (url) => {
         setPhase('exploring');
-        addMessage('user', `Explore: ${url}`);
+        const userInput = input.trim();
+        addMessage('user', userInput);
         addMessage('assistant', '🔍 Starting exploration phase...');
         setBrowserView(`Loading ${url}...`);
 
@@ -120,7 +121,8 @@ const TestingAgent = () => {
         }
 
         setPhase('designing');
-        addMessage('user', 'Design test cases');
+        const userInput = input.trim();
+        addMessage('user', userInput);
         addMessage('assistant', '📋 Generating test cases...');
 
         try {
@@ -147,7 +149,8 @@ const TestingAgent = () => {
         }
 
         setPhase('implementing');
-        addMessage('user', 'Implement test code');
+        const userInput = input.trim();
+        addMessage('user', userInput);
         addMessage('assistant', '💻 Generating Playwright test code...');
 
         try {
@@ -178,7 +181,8 @@ const TestingAgent = () => {
         }
 
         setPhase('verifying');
-        addMessage('user', 'Verify and run tests');
+        const userInput = input.trim();
+        addMessage('user', userInput);
         addMessage('assistant', '🧪 Running tests...');
         setBrowserView('Running tests...');
 
@@ -254,7 +258,7 @@ const TestingAgent = () => {
         }
     };
 
-    // Handle send
+    // Handle send - uses LLM-based intent classification
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
@@ -263,29 +267,66 @@ const TestingAgent = () => {
         setLoading(true);
 
         try {
-            // Determine action based on input
-            if (/^https?:\/\//.test(userInput)) {
-                await exploreURL(userInput);
-            } else if (userInput.toLowerCase().includes('design') || 
-                       (userInput.toLowerCase().includes('test case') && !testCases.length)) {
-                await designTests();
-            } else if (userInput.toLowerCase().includes('implement') || userInput.toLowerCase().includes('code')) {
-                await implementTests();
-            } else if (userInput.toLowerCase().includes('verify') || userInput.toLowerCase().includes('run')) {
-                await verifyTests();
-            } else {
-                // General chat (context-aware - handles test case refinement)
+            // Use LLM to classify user intent
+            const classification = await apiCall('/classify-intent', 'POST', { input: userInput });
+            
+            // Check for validation errors
+            if (classification.validation_errors && classification.validation_errors.length > 0) {
                 addMessage('user', userInput);
-                const result = await apiCall('/chat', 'POST', { message: userInput });
-                updateMetricsFromResponse(result.metrics);
-                
-                // Check if backend updated test cases (refinement action)
-                if (result.test_cases) {
-                    setTestCases(result.test_cases);
-                    addMessage('assistant', result.response, result.test_cases);
-                } else {
-                    addMessage('assistant', result.response);
-                }
+                addMessage('assistant', `⚠️ ${classification.validation_errors[0]}`);
+                setLoading(false);
+                return;
+            }
+            
+            // Route to appropriate action based on classified intent
+            switch (classification.action) {
+                case 'explore':
+                    if (classification.url) {
+                        await exploreURL(classification.url);
+                    } else {
+                        addMessage('user', userInput);
+                        addMessage('assistant', '⚠️ Please provide a URL to explore (e.g., https://example.com)');
+                    }
+                    break;
+                    
+                case 'design':
+                    await designTests();
+                    break;
+                    
+                case 'refine_tests':
+                    // Handle test case refinement
+                    addMessage('user', userInput);
+                    const refineResult = await apiCall('/refine', 'POST', { feedback: userInput });
+                    updateMetricsFromResponse(refineResult.metrics);
+                    if (refineResult.test_cases) {
+                        setTestCases(refineResult.test_cases);
+                        addMessage('assistant', refineResult.message, refineResult.test_cases);
+                    } else {
+                        addMessage('assistant', refineResult.message);
+                    }
+                    break;
+                    
+                case 'implement':
+                    await implementTests();
+                    break;
+                    
+                case 'verify':
+                    await verifyTests();
+                    break;
+                    
+                case 'chat':
+                default:
+                    // General chat
+                    addMessage('user', userInput);
+                    const chatResult = await apiCall('/chat', 'POST', { message: userInput });
+                    updateMetricsFromResponse(chatResult.metrics);
+                    if (chatResult.test_cases) {
+                        setTestCases(chatResult.test_cases);
+                        addMessage('assistant', chatResult.response, chatResult.test_cases);
+                    } else {
+                        addMessage('assistant', chatResult.response);
+                    }
+                    break;
             }
         } catch (error) {
             addMessage('assistant', '❌ Error: ' + error.message);

@@ -106,7 +106,7 @@ class DesignService:
         return f'''Based on this page structure:
 {json.dumps(page_structure, indent=2)}
 
-Generate a COMPREHENSIVE test plan of 5-8 test cases that includes coverage of:
+Generate a COMPREHENSIVE test plan that includes coverage of:
 
 1. Navigation behavior
 2. Valid input scenarios

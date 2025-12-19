@@ -75,6 +75,7 @@ All tests in a session share one log file and one video directory
 import pytest
 import json
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright, Page
@@ -279,6 +280,9 @@ def page(request):
         
         # Log test completion with actual result
         logged_page.cleanup(passed=passed)
+        
+        # Add delay to ensure video captures the final state
+        time.sleep(1.5)
         
         # Close context to save video
         context.close()

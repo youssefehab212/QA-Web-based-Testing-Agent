@@ -8,6 +8,7 @@ from flask_cors import CORS
 import time
 import os
 import json
+import re
 
 from llm.groq_client import GroqClient
 from llm.config import LLMConfig
@@ -79,6 +80,138 @@ def health_check():
         'model': llm_config.model_name,
         'timestamp': time.time()
     })
+
+
+@app.route('/api/classify-intent', methods=['POST'])
+def classify_intent():
+    """Use LLM to classify user intent and determine which service to use"""
+    data = request.json
+    user_input = data.get('input', '').strip()
+    
+    if not user_input:
+        return jsonify({'error': 'Input is required'}), 400
+    
+    # Get current context for better classification
+    current_phase = session_state.get('phase', 'idle')
+    has_page_structure = session_state.get('page_structure') is not None
+    has_test_cases = len(session_state.get('test_cases', [])) > 0
+    has_code = bool(session_state.get('generated_code'))
+    
+    # Check if input is a URL - this is deterministic, no need for LLM
+    if helpers.is_valid_url(user_input):
+        return jsonify({
+            'success': True,
+            'intent': 'EXPLORE_URL',
+            'action': 'explore',
+            'url': user_input,
+            'confidence': 1.0
+        })
+    
+    system_prompt = f"""You are an intent classifier for a QA Testing Agent. Classify the user's message into exactly ONE category.
+
+CURRENT CONTEXT:
+- Phase: {current_phase}
+- Has explored page: {has_page_structure}
+- Has test cases: {has_test_cases}
+- Has generated code: {has_code}
+
+CATEGORIES:
+- EXPLORE_REQUEST: User wants to analyze/explore a webpage or URL (e.g., "explore this site", "analyze the page", "scan the website")
+- DESIGN_REQUEST: User wants to create or generate test cases (e.g., "design tests", "create test cases", "generate tests")
+- DESIGN_FEEDBACK: User is giving feedback on existing test cases - wants to add, remove, or modify them (e.g., "add a login test", "remove test 3", "change the first test")
+- IMPLEMENT_REQUEST: User wants to generate automation code (e.g., "implement", "generate code", "write the tests", "create playwright code")
+- VERIFY_REQUEST: User wants to run/execute the tests (e.g., "run tests", "verify", "execute", "run the code")
+- GENERAL_CHAT: General questions, greetings, or anything that doesn't fit above categories
+
+RULES:
+1. If user provides a URL, classify as EXPLORE_REQUEST
+2. If user mentions "add test", "remove test", "modify test" → DESIGN_FEEDBACK
+3. If user says "design", "create tests", "generate test cases" → DESIGN_REQUEST  
+4. If user mentions "code", "implement", "playwright" → IMPLEMENT_REQUEST
+5. If user says "run", "execute", "verify" → VERIFY_REQUEST
+6. Respond with ONLY the category name, nothing else
+
+User message: "{user_input}"
+
+Category:"""
+
+    try:
+        result = llm_call(system_prompt)
+        intent_text = result['text'].strip().upper()
+        
+        # Map intent to action
+        intent_to_action = {
+            'EXPLORE_REQUEST': 'explore',
+            'DESIGN_REQUEST': 'design',
+            'DESIGN_FEEDBACK': 'refine_tests',
+            'IMPLEMENT_REQUEST': 'implement',
+            'VERIFY_REQUEST': 'verify',
+            'GENERAL_CHAT': 'chat'
+        }
+        
+        # Clean up the response - extract just the category
+        detected_intent = 'GENERAL_CHAT'  # default
+        for intent in intent_to_action.keys():
+            if intent in intent_text:
+                detected_intent = intent
+                break
+        
+        action = intent_to_action.get(detected_intent, 'chat')
+
+        log(f"[Intent Classification] User Input: {user_input}, Detected Intent: {detected_intent}, Action: {action}")
+        
+        # Extract URL from user input if action is explore
+        extracted_url = None
+        if action == 'explore':
+            # Try to extract URL from the user input using regex
+            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+            url_match = re.search(url_pattern, user_input)
+            if url_match:
+                extracted_url = url_match.group(0)
+                log(f"[Intent Classification] Extracted URL: {extracted_url}")
+        
+        # Validate action is possible given current state
+        validation_errors = []
+        if action == 'explore' and not extracted_url:
+            validation_errors.append('Please provide a valid URL (e.g., https://example.com)')
+        if action == 'design' and not has_page_structure:
+            validation_errors.append('Please explore a URL first before designing tests')
+            action = 'chat'
+        if action == 'refine_tests' and not has_page_structure:
+            validation_errors.append('Please explore a URL first')
+            action = 'chat'
+        if action == 'implement' and not has_test_cases:
+            validation_errors.append('Please design test cases first')
+            action = 'chat'
+        if action == 'verify' and not has_code:
+            validation_errors.append('Please implement tests first')
+            action = 'chat'
+        
+        response_data = {
+            'success': True,
+            'intent': detected_intent,
+            'action': action,
+            'user_input': user_input,
+            'validation_errors': validation_errors,
+            'response_time': result['response_time']
+        }
+        
+        # Include extracted URL if found
+        if extracted_url:
+            response_data['url'] = extracted_url
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"[Intent Classification] Error: {e}")
+        # Fallback to chat on error
+        return jsonify({
+            'success': True,
+            'intent': 'GENERAL_CHAT',
+            'action': 'chat',
+            'user_input': user_input,
+            'error': str(e)
+        })
 
 
 @app.route('/api/explore', methods=['POST'])
@@ -386,7 +519,7 @@ def get_evidence():
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """Context-aware chat with the LLM - handles refinement requests"""
+    """General chat with the LLM - context-aware responses"""
     data = request.json
     message = data.get('message', '').strip()
     
@@ -394,45 +527,7 @@ def chat():
         return jsonify({'error': 'Message is required'}), 400
     
     try:
-        message_lower = message.lower()
         current_phase = session_state.get('phase', 'idle')
-        
-        # Check if this is a test case refinement request during design phase
-        is_test_case_request = any(keyword in message_lower for keyword in [
-            'add test', 'add more test', 'create test', 'new test',
-            'remove test', 'delete test', 'modify test', 'change test', 'remove', 'delete',
-            'update test', 'edit test', 'add case', 'more cases'
-        ])
-        
-        if is_test_case_request and session_state.get('page_structure'):
-            log("[Chat] Handling test case refinement request...")
-            # Handle test case refinement with context
-            result = design_service.refine_test_cases(
-                user_feedback=message,
-                current_test_cases=session_state.get('test_cases', []),
-                page_structure=session_state['page_structure'],
-                llm_call=llm_call
-            )
-            
-            session_state['test_cases'] = result['test_cases']
-            session_state['phase'] = 'designed'
-            
-            # Update metrics
-            session_state['metrics'] = helpers.update_metrics(
-                session_state['metrics'],
-                result['response_time'],
-                result['tokens_used']
-            )
-            
-            return jsonify({
-                'success': True,
-                'response': result['message'],
-                'test_cases': result['test_cases'],
-                'action_taken': 'refine_test_cases',
-                'response_time': result['response_time'],
-                'tokens_used': result['tokens_used'],
-                'metrics': session_state['metrics']
-            })
         
         # Build context-aware system prompt
         context_parts = ['You are a helpful QA testing assistant.']
@@ -474,6 +569,52 @@ def chat():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/refine', methods=['POST'])
+def refine_tests():
+    """Refine test cases based on user feedback"""
+    data = request.json
+    feedback = data.get('feedback', '').strip()
+    
+    if not feedback:
+        return jsonify({'error': 'Feedback is required'}), 400
+    
+    if not session_state.get('page_structure'):
+        return jsonify({'error': 'Please explore a URL first'}), 400
+    
+    try:
+        log("[Refine] Handling test case refinement request...")
+        
+        result = design_service.refine_test_cases(
+            user_feedback=feedback,
+            current_test_cases=session_state.get('test_cases', []),
+            page_structure=session_state['page_structure'],
+            llm_call=llm_call
+        )
+        
+        session_state['test_cases'] = result['test_cases']
+        session_state['phase'] = 'designed'
+        
+        # Update metrics
+        session_state['metrics'] = helpers.update_metrics(
+            session_state['metrics'],
+            result['response_time'],
+            result['tokens_used']
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': result['message'],
+            'test_cases': result['test_cases'],
+            'response_time': result['response_time'],
+            'tokens_used': result['tokens_used'],
+            'metrics': session_state['metrics']
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/reset', methods=['POST'])
 def reset_session():
     """Reset the session state"""
@@ -497,23 +638,6 @@ def get_state():
         'test_cases_count': len(session_state.get('test_cases', [])),
         'has_generated_code': bool(session_state.get('generated_code')),
         'metrics': session_state['metrics'],
-        'suggested_action': suggestion['action'],
-        'suggestion_message': suggestion['message']
-    })
-
-
-@app.route('/api/determine-action', methods=['POST'])
-def determine_action():
-    """Determine what action to take based on user input and current phase"""
-    data = request.json
-    user_input = data.get('input', '')
-    
-    action = helpers.determine_action(user_input, session_state)
-    suggestion = helpers.get_suggested_action(session_state['phase'])
-    
-    return jsonify({
-        'action': action,
-        'current_phase': session_state['phase'],
         'suggested_action': suggestion['action'],
         'suggestion_message': suggestion['message']
     })

@@ -32,30 +32,37 @@ class ImplementationService:
     
     # Locator strategy documentation for the LLM
     LOCATOR_STRATEGY = """
-LOCATOR STRATEGY (use in this priority order):
-1. **ID** (highest priority - most stable): `page.locator("#login-btn")`
-2. **data-testid** (testing attribute): `page.get_by_test_id("submit-button")`
-3. **aria-label** (semantic/accessible): `page.get_by_label("Email address")`
-4. **role + name** (semantic): `page.get_by_role("button", name="Submit")`
-5. **placeholder** (for inputs): `page.get_by_placeholder("Enter email")`
-6. **text content** (visible text): `page.get_by_text("Login")`
-7. **CSS selector** (fallback): `page.locator(".btn-primary")`
-8. **XPath** (last resort): `page.locator("xpath=//button[@type='submit']")`
+LOCATOR PRIORITY (use in order):
+1. ID: `page.locator("#login-btn")`
+2. data-testid: `page.get_by_test_id("submit")`
+3. role + name: `page.get_by_role("button", name="Submit")`
+4. placeholder: `page.get_by_placeholder("Enter email")`
+5. text: `page.get_by_text("Login")`
+6. CSS: `page.locator(".btn-primary")`
 
-LOCATOR BEST PRACTICES:
-- Prefer semantic locators (get_by_role, get_by_label) over CSS/XPath
-- Use exact=True for text matching when needed: `page.get_by_text("Login", exact=True)`
-- Chain locators for specificity: `page.locator(".form").get_by_role("button")`
-- Use .first or .nth(0) when multiple elements match: `page.get_by_role("link", name="Home").first`
-- Use relative URLs in href selectors, not absolute: `a[href='/products']` NOT `a[href='https://site.com/products']`
+CRITICAL RULES:
+- ALWAYS use .first when multiple matches possible: `page.get_by_role("link", name="Home").first`
+- ALWAYS use wait_until="domcontentloaded": `page.goto(url, wait_until="domcontentloaded")`
+- NEVER use wait_for_load_state("networkidle") - causes timeouts
+- After navigation clicks, use: `page.wait_for_url("**/path**")`
+- For new tabs: `new_page.wait_for_load_state("domcontentloaded")`
+- get_by_text() has NO ignore_case param - use `page.locator("text=/pattern/i")` for case-insensitive
 
-CRITICAL API RULES - DO NOT VIOLATE:
-- get_by_text() does NOT have ignore_case parameter. Use: `page.get_by_text("text")` or `page.locator("text=value")`
-- get_by_role() valid params: name, exact, checked, disabled, expanded, pressed, selected, level
-- For case-insensitive matching, use: `page.locator("text=/pattern/i")` with regex
-- Always handle strict mode: when selector matches multiple elements, use .first, .last, or .nth(n)
-- Use .wait_for() for elements that may take time to appear: `element.wait_for(state="visible")`
-- Use page.wait_for_load_state("networkidle") after navigation before making assertions
+TIMING (wait before asserting):
+- After clicking expandable elements: `content.wait_for(state="visible", timeout=5000)`
+- For footer elements: `element.scroll_into_view_if_needed()`
+- After form submit: `success_msg.wait_for(state="visible", timeout=5000)`
+- NEVER assert immediately after clicking
+
+FORM VALIDATION:
+- HTML5 validation uses browser tooltips, not DOM elements
+- Test with: `is_invalid = input.evaluate("el => !el.validity.valid")`
+- Only look for custom error messages if site uses JS validation
+
+SPECIAL CASES:
+- mailto: links open email client, not browser navigation - don't use expect_navigation
+- Menu links usually navigate same window - don't use expect_page() unless target="_blank"
+- Form fields may NOT clear after submission - assert success message visibility instead
 """
 
     @staticmethod
@@ -94,59 +101,31 @@ Page structure:
 
 {ImplementationService.LOCATOR_STRATEGY}
 
-CRITICAL REQUIREMENTS:
-1. Return ONLY pure Python code - no markdown, no explanations, no comments outside the code
-2. Do NOT include any text before or after the Python code
-3. Do NOT include ```python or ``` code blocks
-4. Do NOT include installation instructions, usage examples, or "How to run" sections
-5. The output must be a valid .py file that can be executed directly
-6. Code must be syntactically correct Python - it will be validated with AST parser
-7. Do NOT define any @pytest.fixture functions - fixtures are provided by conftest.py
-8. Do NOT define browser or page fixtures - just use `page` as a function parameter
-9. Test functions should simply accept `page` as parameter: `def test_example(page):`
+OUTPUT REQUIREMENTS:
+- Return ONLY valid Python code - no markdown, no ```python blocks, no explanations
+- Code will be validated with AST parser - must be syntactically correct
+- Do NOT define @pytest.fixture - fixtures are provided by conftest.py
+- Test functions accept `page` parameter: `def test_example(page):`
 
-COMMON MISTAKES TO AVOID:
-- DO NOT check for specific success or fail messages (e.g. "Login successful") unless specifically specified in Page structure
-- DO NOT use `ignore_case=True` with get_by_text() - it's not a valid parameter!
-- DO NOT use absolute URLs in href selectors - use relative paths
-- DO NOT assume element counts - verify dynamically or use flexible assertions
-- ALWAYS use .first when a locator might match multiple elements
-- ALWAYS add reasonable timeouts for network-dependent assertions
+COMMON MISTAKES:
+- NEVER use networkidle - causes timeouts
+- NEVER assert immediately after clicking - wait first
+- NEVER use expect_page() unless link has target="_blank"
+- NEVER use expect_navigation() on mailto: links
+- ALWAYS use .first for elements that may match multiple times
+- ALWAYS scroll_into_view_if_needed() for footer elements
+- ALWAYS wait_for(state="visible") after clicking expandable elements
+- Form fields may NOT clear after submit - assert success message visibility instead
+- Use validity API for HTML5 validation, not custom error messages
 
-ASSERTIONS - MANDATORY:
-Every test function MUST include assertions to verify the expected outcome. Use Python's assert statement:
+ASSERTIONS (every test MUST have at least one):
+- URL: `assert "/path" in page.url` (use `in`, not `==`)
+- Visibility: `element.wait_for(state="visible"); assert element.is_visible()`
+- Text: `assert "text" in element.text_content()`
+- Count: `assert locator.count() > 0`
+- Form validity: `assert input.evaluate("el => !el.validity.valid")`
 
-1. **Visibility assertions**: `assert element.is_visible()`
-2. **Text content assertions**: `assert element.text_content() == "Expected text"` or `assert "Expected text" in element.text_content()`
-3. **URL assertions**: `assert page.url == "https://example.com/path"` or `assert "/path" in page.url`
-4. **Title assertions**: `assert page.title() == "Page Title"`
-5. **Attribute assertions**: `assert element.get_attribute("href") == "/products"`
-6. **Count assertions**: `assert page.locator(".item").count() == 5`
-7. **Value assertions**: `assert input_element.input_value() == "entered text"`
-8. **Enabled/Disabled**: `assert button.is_enabled()` or `assert button.is_disabled()`
-9. **Checked state**: `assert checkbox.is_checked()`
-10. **Contains text**: `assert "partial text" in element.text_content()`
-11. **Element exists**: `assert page.locator(".element").count() > 0`
-
-ASSERTION BEST PRACTICES:
-- Every test MUST have at least one assert statement - tests without assertions are INVALID
-- Place assertions AFTER the action that should produce the expected result
-- Use descriptive assertion messages: `assert condition, "Error message explaining what failed"`
-- Add wait_for_load_state() before assertions on dynamically loaded content: `page.wait_for_load_state("networkidle")`
-- For navigation tests, always assert the final URL
-- For form submissions, assert success message or redirect URL
-- Use .wait_for() before checking element state: `element.wait_for(state="visible")`
-
-The code should:
-- Use Playwright sync API with pytest
-- Include only: `import pytest` and `from playwright.sync_api import sync_playwright, expect` (and `import re` if needed)
-- NOT include any @pytest.fixture definitions - the page fixture is provided by conftest.py
-- Have one test function per test case, each accepting `page` as parameter
-- Use Python assert statements - EVERY TEST MUST HAVE ASSERTIONS
-- Follow the LOCATOR STRATEGY above (prefer semantic locators)
-- Handle cases where multiple elements match by using .first, .last, or .nth()
-
-Start directly with the imports and end with the last line of Python code.'''
+Start directly with imports, end with last line of code.'''
 
     @staticmethod
     def parse_response(response_text: str, page_structure: Dict[str, Any], test_cases: List[Dict[str, Any]]) -> str:

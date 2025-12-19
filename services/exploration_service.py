@@ -258,7 +258,7 @@ Here is the ACTUAL page data extracted from the DOM:
 Page Title: {dom_data.get('title', 'Unknown')}
 
 Interactive Elements Found ({len(dom_data.get('elements', []))} elements):
-{json.dumps(dom_data.get('elements', [])[:20], indent=2)}
+{json.dumps(dom_data.get('elements', [])[:50], indent=2)}
 
 Forms Found:
 {json.dumps(dom_data.get('forms', []), indent=2)}
