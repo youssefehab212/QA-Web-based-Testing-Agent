@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QA Testing Agent - Human-in-the-Loop</title>
+    
+    <!-- React and Dependencies -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="m-0 p-0">
+    <div id="root"></div>
+    
+    <!-- Frontend Components -->
+    <!-- Backend logic is handled by Python (run: python main.py) -->
+    
+    <script src="frontend/components/Icons.js"></script>
+    <script src="frontend/components/ChatMessage.js"></script>
+    <script src="frontend/components/MetricsPanel.js"></script>
+    <script src="frontend/components/BrowserView.js"></script>
+    <script src="frontend/components/PhaseIndicator.js"></script>
+    <script src="frontend/components/Header.js"></script>
+    <script src="frontend/components/ChatInput.js"></script>
+    <script src="frontend/components/WelcomeScreen.js"></script>
+    <script src="frontend/App.js"></script>
+    
+    <!-- Initialize React Application -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(React.createElement(window.TestingAgent));
+            console.log('QA Testing Agent initialized. Backend: python main.py');
+        });
+    </script>
+</body>
+</html>
