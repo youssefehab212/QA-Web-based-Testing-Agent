@@ -88,12 +88,13 @@ class DesignService:
         return filepath
     
     @staticmethod
-    def generate_prompt(page_structure: Dict[str, Any]) -> str:
+    def generate_prompt(page_structure: Dict[str, Any], user_input: str = "") -> str:
         """
         Generate the design prompt for test cases
         
         Args:
             page_structure: The page structure from exploration
+            user_input: Optional user input to guide test case generation
             
         Returns:
             The design prompt
@@ -102,9 +103,20 @@ class DesignService:
         log(f"  - URL: {page_structure.get('url', 'N/A')}")
         log(f"  - Elements available: {len(page_structure.get('elements', []))}")
         log(f"  - User flows available: {len(page_structure.get('userFlows', []))}")
+        log(f"  - User input: {user_input if user_input else 'None'}")
+        
+        user_guidance = ""
+        if user_input:
+            user_guidance = f"""\nUSER GUIDANCE:
+The user has provided the following input to guide test case generation:
+"{user_input}"
+
+Please take this guidance into account when designing the test cases.
+"""
         
         return f'''Based on this page structure:
 {json.dumps(page_structure, indent=2)}
+{user_guidance}
 
 Generate a COMPREHENSIVE test plan that includes coverage of:
 
@@ -187,13 +199,14 @@ Return ONLY a JSON array of test cases:
         ]
     
     @staticmethod
-    def design(page_structure: Dict[str, Any], llm_call: Callable) -> Dict[str, Any]:
+    def design(page_structure: Dict[str, Any], llm_call: Callable, user_input: str = "") -> Dict[str, Any]:
         """
         Design test cases based on page structure
         
         Args:
             page_structure: Page structure from exploration
             llm_call: LLM call function
+            user_input: Optional user input to guide test case generation
             
         Returns:
             Design result with test_cases, response_time, and tokens_used
@@ -205,13 +218,13 @@ Return ONLY a JSON array of test cases:
         # Step 1: Generate prompt
         log("")
         log(">>> STEP 1: GENERATING PROMPT <<<")
-        prompt = DesignService.generate_prompt(page_structure)
+        prompt = DesignService.generate_prompt(page_structure, user_input)
         log(f"Prompt generated: {len(prompt)} characters")
         
         # Step 2: Call LLM
         log("")
         log(">>> STEP 2: CALLING LLM <<<")
-        log("Sending prompt to Ollama...")
+        log("Sending prompt...")
         result = llm_call(prompt)
         log(f"LLM response received!")
         log(f"  - Response time: {result.get('response_time', 0):.2f}s")

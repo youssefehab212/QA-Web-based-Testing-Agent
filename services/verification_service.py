@@ -571,8 +571,20 @@ def pytest_sessionfinish(session, exitstatus):
         # Get evidence report from conftest.py
         evidence_report = VerificationService.get_latest_evidence_report()
         
-        # Collect evidence files
-        video_files = list(evidence_dir.rglob("*.webm"))
+        # Collect evidence files from the latest session directory only
+        # Find the most recent session directory
+        session_dirs = sorted([d for d in evidence_dir.iterdir() if d.is_dir()], 
+                            key=lambda d: d.stat().st_mtime, 
+                            reverse=True)
+        
+        if session_dirs:
+            latest_session = session_dirs[0]
+            video_files = list(latest_session.glob("*.webm"))
+            log(f"Found {len(video_files)} videos in latest session: {latest_session.name}")
+        else:
+            video_files = []
+            log("No session directories found", "WARN")
+        
         log_files = list(evidence_dir.glob("test_execution_*.log"))
         log_file = max(log_files, key=lambda f: f.stat().st_mtime) if log_files else None
         

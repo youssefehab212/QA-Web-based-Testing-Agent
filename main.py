@@ -3,12 +3,14 @@ QA Testing Agent - Flask Backend
 Main entry point for the Python backend server
 """
 
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, send_file
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 import time
 import os
 import json
 import re
+from pathlib import Path
 
 from llm.groq_client import GroqClient
 from llm.config import LLMConfig
@@ -121,6 +123,7 @@ CATEGORIES:
 - DESIGN_FEEDBACK: User is giving feedback on existing test cases - wants to add, remove, or modify them (e.g., "add a login test", "remove test 3", "change the first test")
 - IMPLEMENT_REQUEST: User wants to generate automation code (e.g., "implement", "generate code", "write the tests", "create playwright code")
 - VERIFY_REQUEST: User wants to run/execute the tests (e.g., "run tests", "verify", "execute", "run the code")
+- CRITIQUE_RUN: User wants to critique or get feedback on a test run performed by the agent (e.g., "critique the run", "analyze the results", "what went wrong", "review the test run")
 - GENERAL_CHAT: General questions, greetings, or anything that doesn't fit above categories
 
 RULES:
@@ -129,7 +132,8 @@ RULES:
 3. If user says "design", "create tests", "generate test cases" → DESIGN_REQUEST  
 4. If user mentions "code", "implement", "playwright" → IMPLEMENT_REQUEST
 5. If user says "run", "execute", "verify" → VERIFY_REQUEST
-6. Respond with ONLY the category name, nothing else
+6. If user says "critique", "analyze results", "review run", "what went wrong" → CRITIQUE_RUN
+7. Respond with ONLY the category name, nothing else
 
 User message: "{user_input}"
 
@@ -146,6 +150,7 @@ Category:"""
             'DESIGN_FEEDBACK': 'refine_tests',
             'IMPLEMENT_REQUEST': 'implement',
             'VERIFY_REQUEST': 'verify',
+            'CRITIQUE_RUN': 'critique',
             'GENERAL_CHAT': 'chat'
         }
         
@@ -257,7 +262,10 @@ def design_tests():
         return jsonify({'error': 'Please explore a URL first'}), 400
     
     try:
-        result = design_service.design(session_state['page_structure'], llm_call)
+        data = request.json or {}
+        user_input = data.get('user_input', '')
+        
+        result = design_service.design(session_state['page_structure'], llm_call, user_input)
         session_state['test_cases'] = result['test_cases']
         session_state['phase'] = 'designed'
         
@@ -316,6 +324,29 @@ def implement_tests():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/evidence/<path:filename>', methods=['GET'])
+def serve_evidence(filename):
+    """Serve video files from evidence directory"""
+    try:
+        evidence_dir = Path(__file__).parent / 'evidence'
+        # Don't use secure_filename as it strips directory separators
+        # Instead, construct path safely and validate
+        file_path = (evidence_dir / filename).resolve()
+        
+        # Security check: ensure file is within evidence directory
+        if not file_path.is_relative_to(evidence_dir.resolve()):
+            return jsonify({'error': 'Invalid file path'}), 403
+        
+        if not file_path.exists():
+            return jsonify({'error': f'File not found: {filename}'}), 404
+        
+        return send_file(file_path, mimetype='video/webm')
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/verify', methods=['POST'])
 def verify_tests():
     """Verify tests by actually running them with video evidence"""
@@ -344,11 +375,27 @@ def verify_tests():
             result['tokens_used']
         )
         
+        # Convert video file paths to accessible URLs
+        video_files = result.get('execution_result', {}).get('video_files', [])
+        video_urls = []
+        for video_path in video_files:
+            video_file = Path(video_path)
+            if video_file.exists():
+                # Create relative path from evidence directory
+                evidence_dir = Path(__file__).parent / 'evidence'
+                try:
+                    rel_path = video_file.relative_to(evidence_dir)
+                    # Convert Windows path to URL path (forward slashes)
+                    video_urls.append(f'/api/evidence/{rel_path.as_posix()}')
+                except ValueError:
+                    pass  # File not in evidence directory
+        
         return jsonify({
             'success': True,
             'report': result['report'],
             'evidence': result['report'].get('evidence', {}),
             'execution_details': result['report'].get('execution_details', {}),
+            'video_urls': video_urls,
             'response_time': result['response_time'],
             'tokens_used': result['tokens_used'],
             'metrics': session_state['metrics']
@@ -367,13 +414,14 @@ def verify_tests_streaming():
     
     def generate():
         try:
+            from pathlib import Path as PathLib
+            
             # Get the test file path
             test_file_path = session_state.get('test_file_path')
             
             if not test_file_path:
                 # Find the most recent test file
-                from pathlib import Path
-                tests_dir = Path(__file__).parent / 'tests'
+                tests_dir = PathLib(__file__).parent / 'tests'
                 test_files = sorted(tests_dir.glob("test_*.py"), key=lambda f: f.stat().st_mtime, reverse=True)
                 if test_files:
                     test_file_path = str(test_files[0])
@@ -383,6 +431,29 @@ def verify_tests_streaming():
             
             # Stream test results
             for event in verification_service.run_pytest_streaming(test_file_path):
+                # Add video URLs to complete event
+                if event.get('event') == 'complete':
+                    video_files = event.get('data', {}).get('video_files', [])
+                    log(f"[Streaming] Found {len(video_files)} video files")
+                    video_urls = []
+                    for video_path in video_files:
+                        log(f"[Streaming] Processing video: {video_path}")
+                        video_file = PathLib(video_path)
+                        if video_file.exists():
+                            evidence_dir = PathLib(__file__).parent / 'evidence'
+                            try:
+                                rel_path = video_file.relative_to(evidence_dir)
+                                # Convert Windows path to URL path (forward slashes)
+                                video_url = f'/api/evidence/{rel_path.as_posix()}'
+                                video_urls.append(video_url)
+                                log(f"[Streaming] Added video URL: {video_url}")
+                            except ValueError as ve:
+                                log(f"[Streaming] Could not create relative path: {ve}", "WARN")
+                        else:
+                            log(f"[Streaming] Video file does not exist: {video_path}", "WARN")
+                    event['data']['video_urls'] = video_urls
+                    log(f"[Streaming] Total video URLs: {len(video_urls)}")
+                
                 yield f"data: {json.dumps(event)}\n\n"
                 
                 # If complete, update session state

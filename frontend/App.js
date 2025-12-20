@@ -14,6 +14,7 @@ const TestingAgent = () => {
     const [pageStructure, setPageStructure] = useState(null);
     const [testCases, setTestCases] = useState([]);
     const [generatedCode, setGeneratedCode] = useState('');
+    const [videoUrls, setVideoUrls] = useState([]);
     const [metrics, setMetrics] = useState({
         avgResponseTime: 0,
         tokensUsed: 0,
@@ -126,7 +127,7 @@ const TestingAgent = () => {
         addMessage('assistant', '📋 Generating test cases...');
 
         try {
-            const result = await apiCall('/design', 'POST');
+            const result = await apiCall('/design', 'POST', { user_input: userInput });
             
             setTestCases(result.test_cases);
             updateMetricsFromResponse(result.metrics);
@@ -244,10 +245,14 @@ const TestingAgent = () => {
             // Final summary message
             if (finalReport) {
                 const { passed, failed, total, duration } = finalReport;
-                setBrowserView(`Test Execution Complete\n\nStatus: ${failed === 0 ? 'PASSED' : 'FAILED'}\n${total} tests executed\n✅ ${passed} passed\n❌ ${failed} failed\n⏱️ ${duration.toFixed(2)}s`);
+                const videos = finalReport.video_urls || [];
+                setVideoUrls(videos);  // Update state for future reference
+                const videoCount = videos.length;
+                const videoText = videoCount > 0 ? `\n🎥 ${videoCount} test execution video${videoCount > 1 ? 's' : ''} recorded` : '';
+                setBrowserView(`Test Execution Complete\n\nStatus: ${failed === 0 ? 'PASSED' : 'FAILED'}\n${total} tests executed\n✅ ${passed} passed\n❌ ${failed} failed\n⏱️ ${duration.toFixed(2)}s${videoText}`);
                 addMessage('assistant', 
-                    `\n📊 **Verification Summary**\n\nExecuted ${total} tests: ${passed} passed, ${failed} failed\nDuration: ${duration.toFixed(2)}s\nStatus: ${failed === 0 ? '✅ All tests passed!' : '❌ Some tests failed'}`,
-                    { tests: testResults, ...finalReport }
+                    `\n📊 **Verification Summary**\n\nExecuted ${total} tests: ${passed} passed, ${failed} failed\nDuration: ${duration.toFixed(2)}s\nStatus: ${failed === 0 ? '✅ All tests passed!' : '❌ Some tests failed'}${videoText}`,
+                    { tests: testResults, ...finalReport, videos: videos }
                 );
             }
             
@@ -314,6 +319,13 @@ const TestingAgent = () => {
                     await verifyTests();
                     break;
                     
+                case 'critique':
+                    addMessage('user', userInput);
+                    const critiqueResult = await apiCall('/critique', 'POST', { critique: userInput });
+                    updateMetricsFromResponse(critiqueResult.metrics);
+                    addMessage('assistant', critiqueResult.message);
+                    break;
+                    
                 case 'chat':
                 default:
                     // General chat
@@ -348,6 +360,7 @@ const TestingAgent = () => {
         setPageStructure(null);
         setTestCases([]);
         setGeneratedCode('');
+        setVideoUrls([]);
         setBrowserView('');
         setMetrics({ avgResponseTime: 0, tokensUsed: 0, iterationCount: 0 });
         addMessage('assistant', '🔄 Agent reset. Ready for a new session!');

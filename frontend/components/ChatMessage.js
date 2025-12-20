@@ -54,6 +54,30 @@ const ChatMessage = ({ message }) => {
                         )
                     )
                 )
+            ),
+            
+            // Videos Display
+            data && data.videos && data.videos.length > 0 && React.createElement('div', { 
+                className: "mt-3 p-3 bg-gray-50 rounded" 
+            },
+                React.createElement('p', { className: "font-medium mb-2 text-sm" }, 
+                    `🎥 Test Execution Videos (${data.videos.length}):`
+                ),
+                React.createElement('div', { className: "space-y-2" },
+                    data.videos.map((videoUrl, i) => 
+                        React.createElement('div', { key: i, className: "bg-white p-2 rounded border" },
+                            React.createElement('p', { className: "text-xs text-gray-600 mb-1" }, 
+                                `Video ${i + 1}`
+                            ),
+                            React.createElement('video', {
+                                controls: true,
+                                className: "w-full rounded",
+                                style: { maxHeight: '300px' },
+                                src: `http://localhost:5000${videoUrl}`
+                            })
+                        )
+                    )
+                )
             )
         )
     );
