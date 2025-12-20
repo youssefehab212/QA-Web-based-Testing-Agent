@@ -102,7 +102,7 @@ class ExplorationService:
             log("Playwright initialized successfully")
             
             log("Launching Chromium browser (headless mode)...")
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             log("Browser launched successfully")
             
             log("Creating new browser page...")
